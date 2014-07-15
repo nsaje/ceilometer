@@ -173,7 +173,7 @@ class TestRPCAlarmPartitionCoordination(tests_base.BaseTestCase):
 
         self.coordinator_server = FakeCoordinator(self.transport)
         self.coordinator_server.rpc.start()
-        eventlet.sleep()  # must be sure that fanout queue is created
+        #eventlet.sleep()  # must be sure that fanout queue is created
 
         self.coordination = rpc_alarm.RPCAlarmPartitionCoordination()
         self.alarms = [
