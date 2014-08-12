@@ -25,6 +25,7 @@ import oslo.messaging
 import six
 
 from ceilometer import messaging
+from ceilometer import partitioning
 from ceilometer.openstack.common import context
 from ceilometer.openstack.common.gettextutils import _
 from ceilometer.openstack.common import log
@@ -152,3 +153,9 @@ class DiscoveryBase(object):
 
         :param param: an optional parameter to guide the discovery
         """
+
+
+class CentralAgentPartition(partitioning.Partition):
+    def __init__(self, group_id='global'):
+        super(CentralAgentPartition, self).__init__(
+            group_id='central_agent_%s' % group_id)
