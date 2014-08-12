@@ -7,6 +7,7 @@
 # Authors: Yunhong Jiang <yunhong.jiang@intel.com>
 #          Julien Danjou <julien@danjou.info>
 #          Eoghan Glynn <eglynn@redhat.com>
+#          Nejc Saje <nsaje@redhat.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -158,6 +159,10 @@ class BaseAgentManagerTestCase(base.BaseTestCase):
         params = []
         resources = []
 
+        @property
+        def group_id(self):
+            return 'another_group'
+
     class DiscoveryException(TestDiscoveryException):
         params = []
 
@@ -260,6 +265,14 @@ class BaseAgentManagerTestCase(base.BaseTestCase):
         self.Discovery.resources = []
         self.DiscoveryAnother.resources = []
         super(BaseAgentManagerTestCase, self).tearDown()
+
+    def test_join_partitioning_groups(self):
+        self.mgr.discovery_manager = self.create_discovery_manager()
+        self.mgr.partition_coordinator = p_coord = mock.MagicMock()
+        self.mgr.join_partitioning_groups()
+        expected = [mock.call(self.mgr._construct_group_id(g))
+                    for g in ['another_group', 'global']]
+        self.assertEqual(expected, p_coord.join_group.call_args_list)
 
     def test_setup_polling_tasks(self):
         polling_tasks = self.mgr.setup_polling_tasks()
@@ -544,3 +557,19 @@ class BaseAgentManagerTestCase(base.BaseTestCase):
         self.assertEqual(1, len(self.Pollster.samples))
         self.assertEqual(['discovered_1', 'discovered_2'],
                          self.Pollster.resources)
+
+    def test_discovery_partitioning(self):
+        self.mgr.discovery_manager = self.create_discovery_manager()
+        self.mgr.partition_coordinator = p_coord = mock.MagicMock()
+        self.pipeline_cfg[0]['discovery'] = ['testdiscovery',
+                                             'testdiscoveryanother',
+                                             'testdiscoverynonexistent',
+                                             'testdiscoveryexception']
+        self.setup_pipeline()
+        polling_tasks = self.mgr.setup_polling_tasks()
+        self.mgr.interval_task(polling_tasks.get(60))
+        expected = [mock.call(self.mgr._construct_group_id(d.obj.group_id),
+                              d.obj.resources)
+                    for d in self.mgr.discovery_manager
+                    if hasattr(d.obj, 'resources')]
+        self.assertEqual(expected, p_coord.get_my_subset.call_args_list)
