@@ -39,86 +39,53 @@ OPTS = [
 ]
 cfg.CONF.register_opts(OPTS)
 
-_group_manager = None
 
-
-def get_group_manager(conf):
-    global _group_manager
-    if not _group_manager:
-        _group_manager = _GroupManager(conf)
-
-
-class _GroupManager:
-    """Group manager, one instance per agent"""
-    coordinator = None
-    our_id = uuid.uuid4()
-    group_members = collections.defaultdict(set)
+class GroupCoordinator:
+    """Coordinates groups. One instance per agent."""
+    _coordinator = None
+    _our_id = uuid.uuid4()
 
     def __init__(self, conf):
         if conf.coordination_backend_url:
-            self.coordinator = tooz.coordination.getcoordinator(
-                conf.coordination_backend_url, self.our_id)
+            self._coordinator = tooz.coordination.getcoordinator(
+                conf.coordination_backend_url, self._our_id)
 
-            def heartbeat():
-                while True:
-                    self.coordinator.heartbeat()
-                    self.coordinator.run_watchers()
-                    eventlet.sleep(conf.coordination_heartbeat)
+    def heartbeat(self):
+        if self._coordinator:
+            self._coordinator.heartbeat()
 
-            eventlet.spawn_n(heartbeat)
-
-    def group_join_handler(self, event):
-        self.group_members[event.group_id] += event.member_id
-
-    def group_leave_handler(self, event):
-        self.group_members[event.group_id] -= event.member_id
-
-    def join_group(self, group_id):
-        joined = False
-        while not joined:
-            join_req = self.coordinator.join_group()
+    def _join_group(self, group_id):
+        if not self._coordinator:
+            return
+        while True:
+            join_req = self._coordinator.join_group()
             try:
                 join_req.get()
+                break
             except tooz.MemberAlreadyExist:
                 return
             except tooz.GroupNotCreated:
-                create_grp_req = self.coordinator.create_group(group_id)
+                create_grp_req = self._coordinator.create_group(group_id)
                 try:
                     create_grp_req.get()
                 except tooz.GroupAlreadyExist:
                     pass
                 continue
-            joined = True
 
-        get_members_req = self.coordinator.get_members(group_id)
-        self.group_members[group_id] += get_members_req.get()
+    def get_partitioner(self, group_id="central_agent_global"):
+        self._join_group(group_id)
+        return self.Partitioner(self, group_id)
 
-        self.coordinator.watch_join_group(group_id, self.group_join_handler)
-        self.coordinator.watch_leave_group(group_id, self.group_leave_handler)
+    class Partitioner:
+        """ Work partitioner
+        """
 
-    def get_members(self, group_id):
-        return self.group_members[group_id]
+        def __init__(self, group_coordinator, group_id):
+            self.group_coordinator = group_coordinator
 
-
-class Partition:
-    """ Work partitioning decorator
-    """
-
-    def __init__(self, func, group_id="central_agent_global"):
-        self.func = func
-        functools.update_wrapper(self, func)
-        if not _group_manager:
-            #_group_manager = _GroupManager(cfg.CONF)
-            raise Exception('no group manager!') # TODO prettier exception
-        _group_manager.join_group(group_id)
-
-    def __call__(self, *args, **kwargs):
-        obj = self.func(*args, **kwargs)
-        if hasattr(obj, '__iter__'):
-            members = _get_members()
+        def get_my_partition(self, iterable):
+            members = self.group_coordinator.get_members(group_id)
             our_key = sorted(members).index(self.our_id)
             return [v for v in obj
                     if int(hashlib.md5(str(v)).hexdigest(), 16)
                     % len(members) == our_key]
-        else:
-            return obj
