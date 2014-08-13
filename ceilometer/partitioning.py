@@ -15,7 +15,6 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import functools
 import hashlib
 
 from oslo.config import cfg
@@ -37,13 +36,6 @@ OPTS = [
 ]
 cfg.CONF.register_opts(OPTS)
 
-_partition_coordinator = None
-
-
-def set_partition_coordinator(partition_coordinator):
-    global _partition_coordinator
-    _partition_coordinator = partition_coordinator
-
 
 class PartitionCoordinator:
     """Workload partitioning coordinator.
@@ -57,11 +49,13 @@ class PartitionCoordinator:
     To ensure that the other agents know we're alive, the `heartbeat` method
     should be called periodically.
     """
-    #TODO (nsaje): handle timeouts gracefully
+    # TODO(nsaje): handle timeouts gracefully
 
-    def __init__(self, conf, our_id=None):
+    def __init__(self, conf=None, our_id=None):
         self._coordinator = None
+        self._groups = set()
         self._our_id = our_id or str(uuid.uuid4())
+        conf = conf or cfg.CONF
         if conf.coordination_backend_url:
             self._coordinator = tooz.coordination.get_coordinator(
                 conf.coordination_backend_url, self._our_id)
@@ -82,6 +76,7 @@ class PartitionCoordinator:
             join_req = self._coordinator.join_group(group_id)
             try:
                 join_req.get()
+                self._groups.add(group_id)
                 break
             except tooz.coordination.MemberAlreadyExist:
                 return
@@ -93,49 +88,18 @@ class PartitionCoordinator:
                     pass
                 continue
 
-    def get_members(self, group_id):
+    def _get_members(self, group_id):
         if self._coordinator:
             get_members_req = self._coordinator.get_members(group_id)
             return get_members_req.get()
         else:
             return [self._our_id]
 
-
-class NoPartitionCoordinator(Exception):
-    pass
-
-
-class Partition:
-    """Workload partitioning decorator.
-
-    Before using the decorator, a new instance of `PartitionCoordinator` must
-    be created and set up via the `set_partition_coordinator` function.
-    """
-    def __init__(self, group_id):
-        self.group_id = group_id
-        if not _partition_coordinator:
-            raise NoPartitionCoordinator('Partition coordinator not set! '
-                                         'Before using the decorator, '
-                                         'set up a new instance of '
-                                         '`PartitionCoordinator`.')
-        _partition_coordinator.join_group(group_id)
-
-    def __call__(self, func):
-        """Filters an iterable, returning only objects assigned to us.
-
-        We have a list of objects and get a list of active group members from
-        `tooz`. We then hash all the objects into buckets and return only
-        the ones that hashed into *our* bucket.
-        """
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            obj = func(*args, **kwargs)
-            if hasattr(obj, '__iter__'):
-                members = _partition_coordinator.get_members(self.group_id)
-                our_key = sorted(members).index(_partition_coordinator.our_id)
-                return [v for v in obj
-                        if int(hashlib.md5(str(v)).hexdigest(), 16)
-                        % len(members) == our_key]
-            else:
-                return obj
-        return wrapper
+    def get_our_subset(self, group_id, iterable):
+        if group_id not in self._groups:
+            self.join_group(group_id)
+        members = self._get_members(group_id)
+        our_key = sorted(members).index(self.our_id)
+        return [v for v in iterable
+                if int(hashlib.md5(str(v)).hexdigest(), 16)
+                % len(members) == our_key]

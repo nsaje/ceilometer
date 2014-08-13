@@ -15,11 +15,11 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import mock
 import hashlib
 
 import eventlet
 from eventlet.green import threading
+import mock
 import tooz.coordination
 
 from ceilometer.openstack.common import test
@@ -118,7 +118,7 @@ class TestPartitioning(test.BaseTestCase):
         self.wait_group_finish = WaitGroup()
 
     @staticmethod
-    def get_new_coordinator(shared_storage, agent_id=None):
+    def _get_new_coordinator(shared_storage, agent_id=None):
         with mock.patch('tooz.coordination.get_coordinator',
                         lambda _, member_id:
                         FakeToozCoordinator(member_id, shared_storage)):
@@ -128,36 +128,27 @@ class TestPartitioning(test.BaseTestCase):
     def _usage_simulation(self, *args, **kwargs):
         def worker(agent_id, group_id, all_resources=None,
                    expected_resources=None):
-            partition_coordinator = self.get_new_coordinator(
+            partition_coordinator = self._get_new_coordinator(
                 self.shared_storage, agent_id)
-            with mock.patch('ceilometer.partitioning._partition_coordinator',
-                            partition_coordinator):
-                @partitioning.Partition(group_id=group_id)
-                def discover():
-                    return all_resources
-            if expected_resources is None:
-                self.wait_group_finish.done()
-                return
+            partition_coordinator.join_group(group_id)
             # wait for other 'agents' to initialize
             self.wait_group_init.done()
             self.wait_group_init.wait()
-            # re-patch after wait() because the patching is lost when switching
-            with mock.patch('ceilometer.partitioning._partition_coordinator',
-                            partition_coordinator):
-                try:
-                    actual_resources = discover()
-                    self.assertEqual(expected_resources, actual_resources,
-                                     agent_id)
-                finally:
-                    self.wait_group_finish.done()
+            try:
+                actual_resources = partition_coordinator.get_our_subset(
+                    group_id, all_resources)
+                self.assertEqual(expected_resources, actual_resources,
+                                 agent_id)
+            finally:
+                self.wait_group_finish.done()
 
         self.wait_group_init.add()
         self.wait_group_finish.add()
         return eventlet.spawn(worker, *args, **kwargs)
 
     def test_single_group(self):
-        self._usage_simulation('agent1', 'group')
-        self._usage_simulation('agent2', 'group')
+        self._usage_simulation('agent1', 'group', [], [])
+        self._usage_simulation('agent2', 'group', [], [])
         self.wait_group_finish.wait()
 
         self.assertEqual(sorted(self.shared_storage.keys()), ['group'])
@@ -165,8 +156,8 @@ class TestPartitioning(test.BaseTestCase):
                          ['agent1', 'agent2'])
 
     def test_multiple_groups(self):
-        self._usage_simulation('agent1', 'group1')
-        self._usage_simulation('agent2', 'group2')
+        self._usage_simulation('agent1', 'group1', [], [])
+        self._usage_simulation('agent2', 'group2', [], [])
         self.wait_group_finish.wait()
 
         self.assertEqual(sorted(self.shared_storage.keys()), ['group1',
@@ -188,16 +179,3 @@ class TestPartitioning(test.BaseTestCase):
                           expected_resources=expected_resources[i])
             self._usage_simulation(**kwargs)
         self.wait_group_finish.wait()
-
-
-
-
-
-
-
-
-
-
-
-
-

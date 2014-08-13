@@ -28,7 +28,6 @@ class _BaseServicesDiscovery(plugin.DiscoveryBase):
 
 class LBPoolsDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -39,7 +38,6 @@ class LBPoolsDiscovery(_BaseServicesDiscovery):
 
 class LBVipsDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -50,7 +48,6 @@ class LBVipsDiscovery(_BaseServicesDiscovery):
 
 class LBMembersDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -61,7 +58,6 @@ class LBMembersDiscovery(_BaseServicesDiscovery):
 
 class LBHealthMonitorsDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -71,7 +67,6 @@ class LBHealthMonitorsDiscovery(_BaseServicesDiscovery):
 
 class VPNServicesDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -82,7 +77,6 @@ class VPNServicesDiscovery(_BaseServicesDiscovery):
 
 class IPSecConnectionsDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -92,7 +86,6 @@ class IPSecConnectionsDiscovery(_BaseServicesDiscovery):
 
 class FirewallDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 
@@ -103,7 +96,6 @@ class FirewallDiscovery(_BaseServicesDiscovery):
 
 class FirewallPolicyDiscovery(_BaseServicesDiscovery):
 
-    @plugin.CentralAgentPartition
     def discover(self, param=None):
         """Discover resources to monitor."""
 

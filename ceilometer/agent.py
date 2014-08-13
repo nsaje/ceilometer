@@ -28,6 +28,7 @@ from ceilometer.openstack.common import context
 from ceilometer.openstack.common.gettextutils import _
 from ceilometer.openstack.common import log
 from ceilometer.openstack.common import service as os_service
+from ceilometer import partitioning
 from ceilometer import pipeline
 
 LOG = log.getLogger(__name__)
@@ -107,6 +108,9 @@ class AgentManager(os_service.Service):
         self.pollster_manager = self._extensions('poll', namespace)
         self.discovery_manager = self._extensions('discover')
         self.context = context.RequestContext('admin', 'admin', is_admin=True)
+        self.partition_coordinator = partitioning.PartitionCoordinator()
+        for discoverer in self.discovery_manager:
+            self.partition_coordinator.join_group(discoverer.obj.group_id)
 
     @staticmethod
     def _extensions(category, agent_ns=None):
@@ -138,10 +142,15 @@ class AgentManager(os_service.Service):
     def start(self):
         self.pipeline_manager = pipeline.setup_pipeline()
 
+        min_interval = float('inf')
         for interval, task in six.iteritems(self.setup_polling_tasks()):
             self.tg.add_timer(interval,
                               self.interval_task,
+                              interval,  # allow time for coordination
                               task=task)
+            min_interval = min(min_interval, interval)
+        self.tg.add_timer(min_interval / 4,
+                          self.partition_coordinator.heartbeat)
 
     @staticmethod
     def interval_task(task):
@@ -166,7 +175,9 @@ class AgentManager(os_service.Service):
             if discoverer:
                 try:
                     discovered = discoverer.discover(param)
-                    resources.extend(discovered)
+                    partitioned = self.partition_coordinator.get_our_subset(
+                        discoverer.group_id, discovered)
+                    resources.extend(partitioned)
                 except Exception as err:
                     LOG.exception(_('Unable to discover resources: %s') % err)
             else:

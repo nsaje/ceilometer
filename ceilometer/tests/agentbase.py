@@ -457,36 +457,7 @@ class BaseAgentManagerTestCase(base.BaseTestCase):
         self._do_test_per_pipeline_discovery(['discovered_1', 'discovered_2'],
                                              ['static_1', 'static_2'])
 
-    def test_multiple_pipelines_different_static_resources(self):
-        # assert that the amalgation of all static resources for a set
-        # of pipelines with a common interval is passed to individual
-        # pollsters matching those pipelines
-        self.pipeline_cfg[0]['resources'] = ['test://']
-        self.pipeline_cfg.append({
-            'name': "another_pipeline",
-            'interval': 60,
-            'counters': ['test'],
-            'resources': ['another://'],
-            'transformers': [],
-            'publishers': ["new"],
-        })
-        self.mgr.discovery_manager = self.create_discovery_manager()
-        self.Discovery.resources = []
-        self.setup_pipeline()
-        polling_tasks = self.mgr.setup_polling_tasks()
-        self.assertEqual(1, len(polling_tasks))
-        self.assertTrue(60 in polling_tasks.keys())
-        self.mgr.interval_task(polling_tasks.get(60))
-        self._verify_discovery_params([])
-        self.assertEqual(1, len(self.Pollster.samples))
-        amalgamated_resources = set(['test://', 'another://'])
-        self.assertEqual(amalgamated_resources,
-                         set(self.Pollster.samples[0][1]))
-        for pipe_line in self.mgr.pipeline_manager.pipelines:
-            self.assertEqual(1, len(pipe_line.publishers[0].samples))
-            published = pipe_line.publishers[0].samples[0]
-            self.assertEqual(amalgamated_resources,
-                             set(published.resource_metadata['resources']))
+
 
     def test_multiple_sources_different_discoverers(self):
         self.Discovery.resources = ['discovered_1', 'discovered_2']
