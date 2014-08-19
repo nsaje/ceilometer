@@ -14,21 +14,9 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from oslo.config import cfg
-from oslo.utils import importutils
-
 from ceilometer.alarm import service as alarm_service
 from ceilometer.openstack.common import service as os_service
 from ceilometer import service
-
-
-OPTS = [
-    cfg.StrOpt('evaluation_service',
-               default='ceilometer.alarm.service.SingletonAlarmService',
-               help='Class to launch as alarm evaluation service.'),
-]
-
-cfg.CONF.register_opts(OPTS, group='alarm')
 
 
 def notifier():
@@ -38,5 +26,4 @@ def notifier():
 
 def evaluator():
     service.prepare_service()
-    eval_service = importutils.import_object(cfg.CONF.alarm.evaluation_service)
-    os_service.launch(eval_service).wait()
+    os_service.launch(alarm_service.AlarmEvaluatorService()).wait()
