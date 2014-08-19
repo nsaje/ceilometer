@@ -24,7 +24,7 @@ from ceilometer.alarm import service
 from ceilometer.tests import base as tests_base
 
 
-class TestSingletonAlarmService(tests_base.BaseTestCase):
+class TestAlarmEvaluatorService(tests_base.BaseTestCase):
     def setUp(self):
         super(TestSingletonAlarmService, self).setUp()
         self.CONF = self.useFixture(fixture_config.Config()).conf
@@ -41,34 +41,63 @@ class TestSingletonAlarmService(tests_base.BaseTestCase):
             ]
         )
         self.api_client = mock.MagicMock()
-        self.singleton = service.SingletonAlarmService()
-        self.singleton.tg = mock.Mock()
-        self.singleton.evaluators = self.evaluators
-        self.singleton.supported_evaluators = ['threshold']
+        self.svc = service.AlarmEvaluatorService()
+        self.svc.tg = mock.Mock()
+        self.svc.partition_coordinator = mock.MagicMock()
+        fake_subset = lambda _, x: x
+        self.svc.partition_coordinator.get_my_subset.side_effect = fake_subset
+        self.svc.evaluators = self.evaluators
+        self.svc.supported_evaluators = ['threshold']
 
-    def test_start(self):
+    def _do_test_start(self, coordination_active=False):
         test_interval = 120
+        coordination_heartbeat = 1.0
         self.CONF.set_override('evaluation_interval',
                                test_interval,
                                group='alarm')
+        self.CONF.set_override('heartbeat',
+                               coordination_heartbeat,
+                               group='coordination')
         with mock.patch('ceilometerclient.client.get_client',
                         return_value=self.api_client):
-            self.singleton.start()
+            p_coord_mock = self.svc.partition_coordinator
+            p_coord_mock.is_active.return_value = coordination_active
+
+            self.svc.start()
+            self.svc.partition_coordinator.start.assert_called_once_with()
+            self.svc.partition_coordinator.join_group.assert_called_once_with(
+                self.svc.PARTITIONING_GROUP_NAME)
+
+            initial_delay = test_interval if coordination_active else None
             expected = [
                 mock.call(test_interval,
-                          self.singleton._evaluate_assigned_alarms,
-                          0),
+                          self.svc._evaluate_assigned_alarms,
+                          initial_delay=initial_delay),
+                mock.call(coordination_heartbeat,
+                          self.svc.partition_coordinator.heartbeat),
                 mock.call(604800, mock.ANY),
             ]
-            actual = self.singleton.tg.add_timer.call_args_list
+            actual = self.svc.tg.add_timer.call_args_list
             self.assertEqual(expected, actual)
+
+    def test_start_singleton(self):
+        self._do_test_start(coordination_active=False)
+
+    def test_start_coordinated(self):
+        self._do_test_start(coordination_active=True)
 
     def test_evaluation_cycle(self):
         alarm = mock.Mock(type='threshold')
         self.api_client.alarms.list.return_value = [alarm]
         with mock.patch('ceilometerclient.client.get_client',
                         return_value=self.api_client):
-            self.singleton._evaluate_assigned_alarms()
+            self.svc.partition_coordinator.get_my_subset.return_value = [alarm]
+
+            self.svc._evaluate_assigned_alarms()
+
+            p_coord_mock = self.svc.partition_coordinator
+            p_coord_mock.get_my_subset.assert_called_once_with(
+                self.svc.PARTITIONING_GROUP_NAME, [alarm])
             self.threshold_eval.evaluate.assert_called_once_with(alarm)
 
     def test_unknown_extension_skipped(self):
@@ -80,8 +109,8 @@ class TestSingletonAlarmService(tests_base.BaseTestCase):
         self.api_client.alarms.list.return_value = alarms
         with mock.patch('ceilometerclient.client.get_client',
                         return_value=self.api_client):
-            self.singleton.start()
-            self.singleton._evaluate_assigned_alarms()
+            self.svc.start()
+            self.svc._evaluate_assigned_alarms()
             self.threshold_eval.evaluate.assert_called_once_with(alarms[1])
 
     def test_singleton_endpoint_types(self):
@@ -91,8 +120,8 @@ class TestSingletonAlarmService(tests_base.BaseTestCase):
                                    endpoint_type,
                                    group='service_credentials')
             with mock.patch('ceilometerclient.client.get_client') as client:
-                self.singleton.api_client = None
-                self.singleton._evaluate_assigned_alarms()
+                self.svc.api_client = None
+                self.svc._evaluate_assigned_alarms()
                 conf = self.CONF.service_credentials
                 expected = [mock.call(2,
                                       os_auth_url=conf.os_auth_url,

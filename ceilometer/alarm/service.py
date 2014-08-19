@@ -24,8 +24,8 @@ from oslo.config import cfg
 import six
 from stevedore import extension
 
-from ceilometer.alarm.partition import coordination
 from ceilometer.alarm import rpc as rpc_alarm
+from ceilometer import coordination
 from ceilometer import messaging
 from ceilometer.openstack.common.gettextutils import _
 from ceilometer.openstack.common import log
@@ -48,14 +48,42 @@ cfg.CONF.import_opt('notifier_rpc_topic', 'ceilometer.alarm.rpc',
                     group='alarm')
 cfg.CONF.import_opt('partition_rpc_topic', 'ceilometer.alarm.rpc',
                     group='alarm')
+cfg.CONF.import_opt('heartbeat', 'ceilometer.coordination',
+                    group='coordination')
 
 LOG = log.getLogger(__name__)
 
 
 @six.add_metaclass(abc.ABCMeta)
-class AlarmService(object):
+class AlarmEvaluatorService(os_service.Service):
 
     EXTENSIONS_NAMESPACE = "ceilometer.alarm.evaluator"
+    PARTITIONING_GROUP_NAME = "alarm_evaluator"
+
+    def __init__(self):
+        super(AlarmEvaluatorService, self).__init__()
+        self._load_evaluators()
+        self.api_client = None
+        self.partition_coordinator = coordination.PartitionCoordinator()
+
+    def start(self):
+        super(AlarmEvaluatorService, self).start()
+        self.partition_coordinator.start()
+        self.partition_coordinator.join_group(self.PARTITIONING_GROUP_NAME)
+
+        # allow time for coordination if necessary
+        delay_start = self.partition_coordinator.is_active()
+
+        if self.evaluators:
+            interval = cfg.CONF.alarm.evaluation_interval
+            self.tg.add_timer(
+                interval,
+                self._evaluate_assigned_alarms,
+                initial_delay=interval if delay_start else None)
+        self.tg.add_timer(cfg.CONF.coordination.heartbeat,
+                          self.partition_coordinator.heartbeat)
+        # Add a dummy thread to have wait() working
+        self.tg.add_timer(604800, lambda: None)
 
     def _load_evaluators(self):
         self.evaluators = extension.ExtensionManager(
@@ -104,85 +132,11 @@ class AlarmService(object):
         LOG.debug(_('evaluating alarm %s') % alarm.alarm_id)
         self.evaluators[alarm.type].obj.evaluate(alarm)
 
-    @abc.abstractmethod
     def _assigned_alarms(self):
-        pass
-
-
-class SingletonAlarmService(AlarmService, os_service.Service):
-
-    def __init__(self):
-        super(SingletonAlarmService, self).__init__()
-        self._load_evaluators()
-        self.api_client = None
-
-    def start(self):
-        super(SingletonAlarmService, self).start()
-        if self.evaluators:
-            interval = cfg.CONF.alarm.evaluation_interval
-            self.tg.add_timer(
-                interval,
-                self._evaluate_assigned_alarms,
-                0)
-        # Add a dummy thread to have wait() working
-        self.tg.add_timer(604800, lambda: None)
-
-    def _assigned_alarms(self):
-        return self._client.alarms.list(q=[{'field': 'enabled',
-                                            'value': True}])
-
-
-class PartitionedAlarmService(AlarmService, os_service.Service):
-
-    def __init__(self):
-        super(PartitionedAlarmService, self).__init__()
-        transport = messaging.get_transport()
-        self.rpc_server = messaging.get_rpc_server(
-            transport, cfg.CONF.alarm.partition_rpc_topic, self)
-
-        self._load_evaluators()
-        self.api_client = None
-        self.partition_coordinator = coordination.PartitionCoordinator()
-
-    def start(self):
-        super(PartitionedAlarmService, self).start()
-        if self.evaluators:
-            eval_interval = cfg.CONF.alarm.evaluation_interval
-            self.tg.add_timer(
-                eval_interval / 4,
-                self.partition_coordinator.report_presence,
-                0)
-            self.tg.add_timer(
-                eval_interval / 2,
-                self.partition_coordinator.check_mastership,
-                eval_interval,
-                *[eval_interval, self._client])
-            self.tg.add_timer(
-                eval_interval,
-                self._evaluate_assigned_alarms,
-                eval_interval)
-        self.rpc_server.start()
-        # Add a dummy thread to have wait() working
-        self.tg.add_timer(604800, lambda: None)
-
-    def stop(self):
-        self.rpc_server.stop()
-        super(PartitionedAlarmService, self).stop()
-
-    def _assigned_alarms(self):
-        return self.partition_coordinator.assigned_alarms(self._client)
-
-    def presence(self, context, data):
-        self.partition_coordinator.presence(data.get('uuid'),
-                                            data.get('priority'))
-
-    def assign(self, context, data):
-        self.partition_coordinator.assign(data.get('uuid'),
-                                          data.get('alarms'))
-
-    def allocate(self, context, data):
-        self.partition_coordinator.allocate(data.get('uuid'),
-                                            data.get('alarms'))
+        all_alarms = self._client.alarms.list(q=[{'field': 'enabled',
+                                                  'value': True}])
+        return self.partition_coordinator.get_my_subset(
+            self.PARTITIONING_GROUP_NAME, all_alarms)
 
 
 class AlarmNotifierService(os_service.Service):
